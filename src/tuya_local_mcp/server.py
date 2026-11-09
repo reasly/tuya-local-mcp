@@ -9,7 +9,7 @@ from mcp.server.mcpserver import MCPServer
 
 from . import __version__
 from .config import Config
-from .devices import DeviceError, check, connect, require_light, summarise
+from .devices import DeviceError, check, connect, prime_addresses, read_status, require_light, summarise
 from .discovery import passive_scan
 from .registry import DeviceRecord, RegistryError, load_registry, resolve
 
@@ -18,9 +18,10 @@ mcp = MCPServer(
     version=__version__,
     instructions=(
         "Controls Tuya / Smart Life devices over the local network. Address devices "
-        "by friendly name, device id, or IP. Call list_devices first to see what "
-        "exists. get_status shows raw datapoints for products the helper tools do "
-        "not cover; set_datapoint writes them."
+        "by friendly name, device id, or IP. A device with a MAC and no stored IP "
+        "is resolved from the local neighbor table before any beacon listen. Call "
+        "list_devices first to see what exists. get_status shows raw datapoints "
+        "for products the helper tools do not cover; set_datapoint writes them."
     ),
 )
 
@@ -55,8 +56,7 @@ def _status(record: DeviceRecord, *, use_cache: bool = True) -> dict[str, Any]:
         if cached and now - cached[0] < _CONFIG.cache_ttl:
             return cached[1]
 
-    device = connect(record, timeout=_CONFIG.connect_timeout)
-    result = check(device.status(), record)
+    result = check(read_status(record, timeout=_CONFIG.connect_timeout), record)
     _STATUS_CACHE[record.device_id] = (now, result)
     return result
 
@@ -96,6 +96,7 @@ def list_devices() -> dict[str, Any]:
     returned. Use the `name` field when calling the other tools.
     """
     records = _registry()
+    prime_addresses(records)
     return {
         "source": str(_CONFIG.devices_file),
         "read_only": _CONFIG.read_only,

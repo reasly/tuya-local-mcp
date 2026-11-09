@@ -5,8 +5,10 @@ import pytest
 from tuya_local_mcp.registry import (
     DeviceRecord,
     RegistryError,
+    clear_runtime_ips,
     load_registry,
     parse_registry,
+    remember_ip,
     resolve,
 )
 
@@ -52,10 +54,41 @@ def test_parses_devices_json_list():
     assert records[1].version_float == 3.4
 
 
+def test_mac_is_normalised_and_shown_without_the_local_key():
+    records = parse_registry(
+        [
+            {
+                "name": "Hall",
+                "id": "bf4444444444444444dddd",
+                "key": "0123456789abcdef",
+                "mac": "00-33-7A-AA-BB-A9",
+            }
+        ]
+    )
+    assert records[0].mac == "00:33:7a:aa:bb:a9"
+    assert records[0].version_specified is False
+    public = records[0].public()
+    assert public["mac"] == "00:33:7a:aa:bb:a9"
+    assert public["ip"] is None
+
+    remember_ip(records[0].device_id, "192.168.20.149")
+    try:
+        assert records[0].public()["ip"] == "192.168.20.149"
+        assert records[0].ip is None
+    finally:
+        clear_runtime_ips()
+
+
+def test_garbage_mac_is_dropped():
+    records = parse_registry([{"name": "Hall", "id": "x", "key": "k", "mac": "not-a-mac"}])
+    assert records[0].mac is None
+
+
 def test_parses_snapshot_wrapper_and_ver_alias():
     records = parse_registry(SNAPSHOT_JSON)
     assert len(records) == 1
     assert records[0].version == "3.3"
+    assert records[0].version_specified is True
     assert records[0].ip == "192.168.1.60"
 
 

@@ -17,6 +17,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
+from .neighbors import normalize_mac
+
+# IPs learned at runtime (neighbor table, beacon). The device file is not rewritten;
+# DHCP addresses change, and a later lookup should be free to replace these.
+_runtime_ips: dict[str, str] = {}
+# Protocol version learned by a successful local handshake. Cloud dumps often
+# omit it, and the 3.3 default makes a 3.4/3.5 device reset the session.
+_runtime_versions: dict[str, str] = {}
+
 # Tuya product categories that behave like lights. Anything not in here is
 # treated as a generic switch/outlet, which is the safer default because the
 # bulb helpers assume dimming and colour datapoints exist.
@@ -37,6 +46,9 @@ class DeviceRecord:
     version: str = "3.3"
     category: str | None = None
     product_name: str | None = None
+    mac: str | None = None
+    # False when the device file omitted version/ver and we filled in the default.
+    version_specified: bool = False
 
     @property
     def is_light(self) -> bool:
@@ -54,8 +66,10 @@ class DeviceRecord:
         return {
             "device_id": self.device_id,
             "name": self.name,
-            "ip": self.ip,
-            "version": self.version,
+            "ip": _runtime_ips.get(self.device_id) or self.ip,
+            "mac": self.mac,
+            "version": _runtime_versions.get(self.device_id, self.version),
+            "version_specified": self.version_specified,
             "category": self.category,
             "product_name": self.product_name,
             "kind": "light" if self.is_light else "switch",
@@ -78,16 +92,42 @@ def _to_record(entry: dict[str, Any]) -> DeviceRecord | None:
         # Sub-devices behind a gateway and incomplete wizard rows land here.
         return None
 
-    version = _first(entry, "version", "ver") or "3.3"
+    raw_version = _first(entry, "version", "ver")
+    mac = _first(entry, "mac", "wifi_mac", "macAddress")
     return DeviceRecord(
         device_id=str(device_id),
         name=str(_first(entry, "name", "product_name") or device_id),
         local_key=str(local_key),
         ip=_first(entry, "ip", "address"),
-        version=str(version),
+        version=str(raw_version) if raw_version is not None else "3.3",
         category=_first(entry, "category"),
         product_name=_first(entry, "product_name", "model"),
+        mac=normalize_mac(mac if isinstance(mac, str) else None),
+        version_specified=raw_version is not None,
     )
+
+
+def remember_ip(device_id: str, ip: str) -> None:
+    """Remember an address learned from ARP or a beacon. Does not touch the file."""
+    _runtime_ips[device_id] = ip
+
+
+def clear_runtime_ips() -> None:
+    _runtime_ips.clear()
+
+
+def remember_version(device_id: str, version: str) -> None:
+    """Remember a protocol version confirmed by a local handshake."""
+    _runtime_versions[device_id] = str(version)
+
+
+def cached_version(device_id: str) -> str | None:
+    """Protocol version confirmed earlier in this process, if any."""
+    return _runtime_versions.get(device_id)
+
+
+def clear_runtime_versions() -> None:
+    _runtime_versions.clear()
 
 
 def parse_registry(payload: Any) -> list[DeviceRecord]:
